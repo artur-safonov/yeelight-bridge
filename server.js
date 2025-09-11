@@ -1,249 +1,296 @@
 const express = require('express');
-const WebSocket = require('ws');
-const cors = require('cors');
 const miio = require('miio');
+const cors = require('cors');
 
-class YeelightBridge {
-    constructor() {
+class YeelightBridgeServer {
+    constructor(port = 3000) {
+        this.port = port;
         this.app = express();
-        this.server = null;
-        this.wss = null;
-        this.devices = new Map();
-        this.connectedClients = new Set();
-        this.port = this.getPortFromArgs();
-        this.showConsole = process.argv.includes('--console');
-        
+        this.bulbs = new Map();
         this.setupMiddleware();
         this.setupRoutes();
-        this.setupWebSocket();
-    }
-
-    getPortFromArgs() {
-        const portArg = process.argv.find(arg => arg.startsWith('--port='));
-        return portArg ? parseInt(portArg.split('=')[1]) : 8080;
     }
 
     setupMiddleware() {
-        this.app.use(cors());
+        this.app.use(cors({
+            origin: '*',
+            methods: ['GET', 'POST', 'PUT', 'DELETE'],
+            allowedHeaders: ['Content-Type', 'Authorization']
+        }));
         this.app.use(express.json());
+
+        this.app.use((req, res, next) => {
+            console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+            next();
+        });
     }
 
     setupRoutes() {
-        // Health check
-        this.app.get('/health', (req, res) => {
-            res.json({ status: 'ok', devices: this.devices.size });
+        this.app.get('/status', (req, res) => {
+            res.json({
+                status: 'ok',
+                bulbs: Array.from(this.bulbs.values()).map(bulb => ({
+                    id: bulb.id,
+                    model: bulb.model,
+                    connected: bulb.connected,
+                    address: bulb.address
+                })),
+                timestamp: new Date().toISOString()
+            });
         });
 
-        // Get all devices
-        this.app.get('/devices', (req, res) => {
-            const deviceList = Array.from(this.devices.values()).map(device => ({
-                id: device.id,
-                name: device.name,
-                ip: device.ip,
-                model: device.model,
-                connected: device.connected
+        this.app.get('/bulbs', (req, res) => {
+            const bulbList = Array.from(this.bulbs.values()).map(bulb => ({
+                id: bulb.id,
+                model: bulb.model || 'Unknown',
+                connected: bulb.connected,
+                address: bulb.address,
+                brightness: bulb.lastBrightness || 0,
+                color: bulb.lastColor || { r: 255, g: 255, b: 255 }
             }));
-            res.json(deviceList);
+            res.json({ bulbs: bulbList });
         });
 
-        // Add device
-        this.app.post('/devices', (req, res) => {
-            const { name, ip, token, model = 'yeelight.color' } = req.body;
-            
-            if (!name || !ip || !token) {
-                return res.status(400).json({ error: 'Missing required fields' });
+        this.app.get('/bulbs/:id', (req, res) => {
+            const bulb = this.bulbs.get(req.params.id);
+            if (!bulb) {
+                return res.status(404).json({ error: 'Bulb not found' });
             }
+            res.json({
+                id: bulb.id,
+                model: bulb.model,
+                connected: bulb.connected,
+                address: bulb.address,
+                brightness: bulb.lastBrightness || 0,
+                color: bulb.lastColor || { r: 255, g: 255, b: 255 }
+            });
+        });
 
-            const deviceId = `yeelight_${Date.now()}`;
-            const device = {
-                id: deviceId,
-                name,
-                ip,
-                token,
-                model,
-                connected: false,
-                device: null
+        this.app.post('/bulbs', async (req, res) => {
+            try {
+                const { ip, token, name } = req.body;
+                if (!ip || !token || !name) {
+                    return res.status(400).json({ 
+                        error: 'Missing required fields: ip, token, and name are required' 
+                    });
+                }
+                const bulbId = `bulb_${Date.now()}`;
+                const result = await this.addBulb(ip, token, name, bulbId);
+                if (result.success) {
+                    res.status(201).json(result);
+                } else {
+                    res.status(400).json(result);
+                }
+            } catch (error) {
+                console.error('Error in POST /bulbs:', error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: 'Internal server error' 
+                });
+            }
+        });
+
+        this.app.delete('/bulbs/:id', (req, res) => {
+            const bulbId = req.params.id;
+            const bulb = this.bulbs.get(bulbId);
+            if (!bulb) {
+                return res.status(404).json({ error: 'Bulb not found' });
+            }
+            try {
+                if (bulb.device && bulb.device.destroy) {
+                    bulb.device.destroy();
+                }
+                this.bulbs.delete(bulbId);
+                res.json({ 
+                    success: true, 
+                    message: `Bulb ${bulb.name} removed successfully` 
+                });
+            } catch (error) {
+                console.error(`Error removing bulb ${bulbId}:`, error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: 'Error disconnecting bulb' 
+                });
+            }
+        });
+
+        this.app.post('/setColor', async (req, res) => {
+            try {
+                const { r, g, b, brightness = 100, bulbs: targetBulbs } = req.body;
+                if (r === undefined || g === undefined || b === undefined) {
+                    return res.status(400).json({ error: 'RGB values are required' });
+                }
+                const results = [];
+                const bulbsToUpdate = targetBulbs ?
+                    targetBulbs.map(id => this.bulbs.get(id)).filter(Boolean) :
+                    Array.from(this.bulbs.values());
+                for (const bulb of bulbsToUpdate) {
+                    if (bulb.connected) {
+                        try {
+                            const result = await this.setBulbColor(bulb, r, g, b, brightness);
+                            results.push({ id: bulb.id, success: true, result });
+                        } catch (error) {
+                            console.error(`Error setting color for bulb ${bulb.id}:`, error.message);
+                            results.push({ id: bulb.id, success: false, error: error.message });
+                        }
+                    } else {
+                        results.push({ id: bulb.id, success: false, error: 'Bulb not connected' });
+                    }
+                }
+                res.json({ results });
+            } catch (error) {
+                console.error('Error in setColor:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        this.app.post('/setBrightness', async (req, res) => {
+            try {
+                const { brightness, bulbs: targetBulbs } = req.body;
+                if (brightness === undefined || brightness < 1 || brightness > 100) {
+                    return res.status(400).json({ error: 'Brightness must be between 1 and 100' });
+                }
+                const results = [];
+                const bulbsToUpdate = targetBulbs ?
+                    targetBulbs.map(id => this.bulbs.get(id)).filter(Boolean) :
+                    Array.from(this.bulbs.values());
+                for (const bulb of bulbsToUpdate) {
+                    if (bulb.connected) {
+                        try {
+                            const result = await this.setBulbBrightness(bulb, brightness);
+                            results.push({ id: bulb.id, success: true, result });
+                        } catch (error) {
+                            console.error(`Error setting brightness for bulb ${bulb.id}:`, error.message);
+                            results.push({ id: bulb.id, success: false, error: error.message });
+                        }
+                    } else {
+                        results.push({ id: bulb.id, success: false, error: 'Bulb not connected' });
+                    }
+                }
+                res.json({ results });
+            } catch (error) {
+                console.error('Error in setBrightness:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        this.app.post('/power', async (req, res) => {
+            try {
+                const { power, bulbs: targetBulbs } = req.body;
+                if (typeof power !== 'boolean') {
+                    return res.status(400).json({ error: 'Power must be true or false' });
+                }
+                const results = [];
+                const bulbsToUpdate = targetBulbs ?
+                    targetBulbs.map(id => this.bulbs.get(id)).filter(Boolean) :
+                    Array.from(this.bulbs.values());
+                for (const bulb of bulbsToUpdate) {
+                    if (bulb.connected) {
+                        try {
+                            const result = await this.setBulbPower(bulb, power);
+                            results.push({ id: bulb.id, success: true, result });
+                        } catch (error) {
+                            console.error(`Error setting power for bulb ${bulb.id}:`, error.message);
+                            results.push({ id: bulb.id, success: false, error: error.message });
+                        }
+                    } else {
+                        results.push({ id: bulb.id, success: false, error: 'Bulb not connected' });
+                    }
+                }
+                res.json({ results });
+            } catch (error) {
+                console.error('Error in power:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+    }
+
+    async addBulb(ip, token, name, bulbId) {
+        try {
+            const device = await miio.device({
+                address: ip,
+                token: token
+            });
+            try {
+                await device.call('get_prop', ['power']);
+            } catch (testError) {
+                if (device.destroy) device.destroy();
+                return {
+                    success: false,
+                    error: `Could not communicate with bulb: ${testError.message}`
+                };
+            }
+            const bulbInfo = {
+                id: bulbId,
+                device: device,
+                name: name,
+                ip: ip,
+                token: token,
+                model: 'Yeelight',
+                address: ip,
+                connected: true,
+                lastBrightness: 100,
+                lastColor: { r: 255, g: 255, b: 255 }
             };
-
-            this.devices.set(deviceId, device);
-            this.log(`Added device: ${name} (${ip})`);
-            
-            res.json({ id: deviceId, success: true });
-        });
-
-        // Remove device
-        this.app.delete('/devices/:id', (req, res) => {
-            const deviceId = req.params.id;
-            if (this.devices.has(deviceId)) {
-                const device = this.devices.get(deviceId);
-                if (device.device) {
-                    device.device.destroy();
-                }
-                this.devices.delete(deviceId);
-                this.log(`Removed device: ${deviceId}`);
-                res.json({ success: true });
-            } else {
-                res.status(404).json({ error: 'Device not found' });
-            }
-        });
-
-        // Connect to device
-        this.app.post('/devices/:id/connect', async (req, res) => {
-            const deviceId = req.params.id;
-            const device = this.devices.get(deviceId);
-            
-            if (!device) {
-                return res.status(404).json({ error: 'Device not found' });
-            }
-
-            try {
-                this.log(`Connecting to device: ${device.name} (${device.ip})`);
-                const miioDevice = await miio.device({ address: device.ip, token: device.token });
-                device.device = miioDevice;
-                device.connected = true;
-                this.log(`Connected to device: ${device.name}`);
-                res.json({ success: true });
-            } catch (error) {
-                this.log(`Failed to connect to device ${device.name}: ${error.message}`);
-                res.status(500).json({ error: error.message });
-            }
-        });
-
-        // Disconnect from device
-        this.app.post('/devices/:id/disconnect', (req, res) => {
-            const deviceId = req.params.id;
-            const device = this.devices.get(deviceId);
-            
-            if (!device) {
-                return res.status(404).json({ error: 'Device not found' });
-            }
-
-            if (device.device) {
-                device.device.destroy();
-                device.device = null;
-                device.connected = false;
-                this.log(`Disconnected from device: ${device.name}`);
-            }
-            
-            res.json({ success: true });
-        });
-
-        // Set device color
-        this.app.post('/devices/:id/color', async (req, res) => {
-            const deviceId = req.params.id;
-            const device = this.devices.get(deviceId);
-            
-            if (!device || !device.connected) {
-                return res.status(404).json({ error: 'Device not found or not connected' });
-            }
-
-            const { r, g, b, brightness = 100 } = req.body;
-            
-            try {
-                // Convert RGB to HSV for Yeelight
-                const hsv = this.rgbToHsv(r, g, b);
-                
-                await device.device.call('set_hsv', [hsv.h, hsv.s, hsv.v]);
-                await device.device.call('set_bright', [brightness]);
-                
-                this.log(`Set color for ${device.name}: RGB(${r},${g},${b}) HSV(${hsv.h},${hsv.s},${hsv.v})`);
-                res.json({ success: true });
-            } catch (error) {
-                this.log(`Failed to set color for ${device.name}: ${error.message}`);
-                res.status(500).json({ error: error.message });
-            }
-        });
-
-        // Set device power
-        this.app.post('/devices/:id/power', async (req, res) => {
-            const deviceId = req.params.id;
-            const device = this.devices.get(deviceId);
-            
-            if (!device || !device.connected) {
-                return res.status(404).json({ error: 'Device not found or not connected' });
-            }
-
-            const { power } = req.body;
-            
-            try {
-                await device.device.call('set_power', [power ? 'on' : 'off']);
-                this.log(`Set power for ${device.name}: ${power ? 'on' : 'off'}`);
-                res.json({ success: true });
-            } catch (error) {
-                this.log(`Failed to set power for ${device.name}: ${error.message}`);
-                res.status(500).json({ error: error.message });
-            }
-        });
-    }
-
-    setupWebSocket() {
-        this.server = require('http').createServer(this.app);
-        this.wss = new WebSocket.Server({ server: this.server });
-
-        this.wss.on('connection', (ws) => {
-            this.connectedClients.add(ws);
-            this.log('New WebSocket client connected');
-            
-            ws.on('close', () => {
-                this.connectedClients.delete(ws);
-                this.log('WebSocket client disconnected');
-            });
-
-            ws.on('message', (message) => {
-                try {
-                    const data = JSON.parse(message);
-                    this.handleWebSocketMessage(ws, data);
-                } catch (error) {
-                    this.log(`Invalid WebSocket message: ${error.message}`);
+            this.bulbs.set(bulbId, bulbInfo);
+            device.on('error', (error) => {
+                if (this.bulbs.has(bulbId)) {
+                    this.bulbs.get(bulbId).connected = false;
                 }
             });
-        });
-    }
-
-    handleWebSocketMessage(ws, data) {
-        switch (data.type) {
-            case 'getDevices':
-                ws.send(JSON.stringify({
-                    type: 'devices',
-                    devices: Array.from(this.devices.values())
-                }));
-                break;
-                
-            case 'setColor':
-                this.log(`Setting color for ${data.deviceId}: RGB(${data.r},${data.g},${data.b})`);
-                this.setDeviceColor(data.deviceId, data.r, data.g, data.b, data.brightness);
-                break;
-                
-            case 'setPower':
-                this.log(`Setting power for ${data.deviceId}: ${data.power ? 'on' : 'off'}`);
-                this.setDevicePower(data.deviceId, data.power);
-                break;
+            return {
+                success: true,
+                bulb: {
+                    id: bulbId,
+                    name: name,
+                    ip: ip,
+                    model: 'Yeelight',
+                    connected: true
+                }
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 
-    async setDeviceColor(deviceId, r, g, b, brightness = 100) {
-        const device = this.devices.get(deviceId);
-        if (!device || !device.connected) return;
 
+    async setBulbColor(bulb, r, g, b, brightness = 100) {
         try {
-            const hsv = this.rgbToHsv(r, g, b);
-            await device.device.call('set_hsv', [hsv.h, hsv.s, hsv.v]);
-            await device.device.call('set_bright', [brightness]);
-            this.log(`Set color for ${device.name}: RGB(${r},${g},${b})`);
+            const { h, s, v } = this.rgbToHsv(r, g, b);
+            await bulb.device.call('set_hsv', [Math.round(h), Math.round(s * 100), 'smooth', 500]);
+            await bulb.device.call('set_bright', [Math.round(brightness), 'smooth', 500]);
+            bulb.lastColor = { r, g, b };
+            bulb.lastBrightness = brightness;
+            return { r, g, b, brightness };
         } catch (error) {
-            this.log(`Failed to set color for ${device.name}: ${error.message}`);
+            console.error(`Error setting color for bulb ${bulb.id}:`, error);
+            throw error;
         }
     }
 
-    async setDevicePower(deviceId, power) {
-        const device = this.devices.get(deviceId);
-        if (!device || !device.connected) return;
-
+    async setBulbBrightness(bulb, brightness) {
         try {
-            await device.device.call('set_power', [power ? 'on' : 'off']);
-            this.log(`Set power for ${device.name}: ${power ? 'on' : 'off'}`);
+            await bulb.device.call('set_bright', [Math.round(brightness), 'smooth', 300]);
+            bulb.lastBrightness = brightness;
+            return { brightness };
         } catch (error) {
-            this.log(`Failed to set power for ${device.name}: ${error.message}`);
+            console.error(`Error setting brightness for bulb ${bulb.id}:`, error);
+            throw error;
+        }
+    }
+
+    async setBulbPower(bulb, power) {
+        try {
+            const powerState = power ? 'on' : 'off';
+            await bulb.device.call('set_power', [powerState, 'smooth', 300]);
+            return { power };
+        } catch (error) {
+            console.error(`Error setting power for bulb ${bulb.id}:`, error);
+            throw error;
         }
     }
 
@@ -257,89 +304,56 @@ class YeelightBridge {
         const diff = max - min;
 
         let h = 0;
-        if (diff !== 0) {
-            if (max === r) {
-                h = ((g - b) / diff) % 6;
-            } else if (max === g) {
-                h = (b - r) / diff + 2;
-            } else {
-                h = (r - g) / diff + 4;
-            }
-        }
-        h = Math.round(h * 60);
-        if (h < 0) h += 360;
-
-        const s = max === 0 ? 0 : diff / max;
+        let s = 0;
         const v = max;
 
-        return {
-            h: h,
-            s: Math.round(s * 100),
-            v: Math.round(v * 100)
-        };
-    }
+        if (diff !== 0) {
+            s = diff / max;
 
-    broadcastToClients(data) {
-        const message = JSON.stringify(data);
-        this.connectedClients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(message);
+            switch (max) {
+                case r:
+                    h = ((g - b) / diff) % 6;
+                    break;
+                case g:
+                    h = (b - r) / diff + 2;
+                    break;
+                case b:
+                    h = (r - g) / diff + 4;
+                    break;
             }
-        });
+
+            h *= 60;
+            if (h < 0) h += 360;
+        }
+
+        return { h, s, v };
     }
 
-    log(message) {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[${timestamp}] ${message}`;
-        
-        if (this.showConsole) {
-            console.log(logMessage);
-        }
-        
-        // Broadcast to connected clients
-        this.broadcastToClients({
-            type: 'log',
-            message: logMessage
-        });
-    }
 
     start() {
-        this.server.listen(this.port, () => {
-            this.log(`Yeelight Bridge server started on port ${this.port}`);
-            this.log('Server is ready to accept connections');
+        this.app.listen(this.port, () => {
+            console.log(`Yeelight Bridge Server running on port ${this.port}`);
         });
     }
-
+    
     stop() {
-        if (this.server) {
-            this.server.close();
-            this.log('Server stopped');
+        for (const bulb of this.bulbs.values()) {
+            if (bulb.device && bulb.device.destroy) {
+                bulb.device.destroy();
+            }
         }
+        this.bulbs.clear();
+        process.exit(0);
     }
 }
 
-// Handle command line arguments
-const args = process.argv.slice(2);
-const showConsole = args.includes('--console');
-const noStartup = args.includes('--no-startup');
+const server = new YeelightBridgeServer(process.env.PORT || 3000);
+server.start();
 
-if (showConsole) {
-    console.log('Console output enabled');
-}
-
-// Create and start the bridge
-const bridge = new YeelightBridge();
-bridge.start();
-
-// Handle graceful shutdown
 process.on('SIGINT', () => {
-    console.log('\nShutting down gracefully...');
-    bridge.stop();
-    process.exit(0);
+    server.stop();
 });
 
 process.on('SIGTERM', () => {
-    console.log('\nShutting down gracefully...');
-    bridge.stop();
-    process.exit(0);
+    server.stop();
 });
