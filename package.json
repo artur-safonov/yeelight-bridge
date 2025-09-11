@@ -1,27 +1,31 @@
 {
-  "name": "yeelight-bridge",
+  "name": "yeelight-bridge-server",
   "version": "1.0.0",
-  "description": "SignalRGB addon to control Yeelight bulbs via miio",
+  "description": "Bridge server for controlling Yeelight bulbs via miio protocol for SignalRGB",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --console",
-    "discover": "node discover-devices.js",
-    "install-deps": "npm install"
-  },
-  "dependencies": {
-    "miio": "^0.15.6",
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "ws": "^8.14.2"
+    "dev": "nodemon server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
-    "signalrgb",
     "yeelight",
     "miio",
-    "rgb",
-    "lighting"
+    "signalrgb",
+    "smart-lights",
+    "home-automation"
   ],
-  "author": "Artur Safonov",
-  "license": "MIT"
+  "author": "SignalRGB Community",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "miio": "^0.15.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
 }
