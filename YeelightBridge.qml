@@ -1,47 +1,32 @@
 Item {
     anchors.fill : parent
-    property var selectedDevices: []
     property var deviceList: []
+    
     Component.onCompleted: {
-    try {
-    selectedDevices = JSON.parse(service.getSetting("General", "SelectedDevices"));
-} catch (e) {
-    selectedDevices = [];
-}
-
-    bridgeServerIP.text = service.getSetting("General", "BridgeServerIP") || "127.0.0.1"
-    bridgeServerPort.text = service.getSetting("General", "BridgeServerPort") || "3000"
-    if (bridgeServerIP.text !== "" && bridgeServerPort.text !== "")
-    {
-        checkConnectionButton.clicked();
+        bridgeServerIP.text = service.getSetting("General", "BridgeServerIP") || "127.0.0.1"
+        bridgeServerPort.text = service.getSetting("General", "BridgeServerPort") || "3000"
+        if (bridgeServerIP.text !== "" && bridgeServerPort.text !== "") {
+            checkConnectionButton.clicked();
+        }
     }
-}
 
 function addYeelightDevice() {
     const xhr = new XMLHttpRequest()
-    const bridgehost = bridgeServerIP.text
-    const bridgeport = bridgeServerPort.text
-    
     const deviceData = {
         name: deviceName.text || (deviceModel.currentText + " (" + deviceIP.text + ")"),
         ip: deviceIP.text,
         token: deviceToken.text
     }
     
-    xhr.open("POST", `http://${bridgehost}:${bridgeport}/bulbs`, true)
+    xhr.open("POST", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs`, true)
     xhr.setRequestHeader("Content-Type", "application/json")
     xhr.onreadystatechange = function () {
         if (xhr.readyState === 4 && xhr.status === 201) {
-            service.log("Device added successfully")
-            // Clear the form
             deviceIP.text = ""
             deviceToken.text = ""
             deviceName.text = ""
             deviceModel.currentIndex = 0
-            // Refresh the device list
             checkConnectionButton.clicked()
-        } else if (xhr.readyState === 4) {
-            service.log("Failed to add device: " + xhr.responseText)
         }
     }
     xhr.send(JSON.stringify(deviceData))
@@ -49,17 +34,11 @@ function addYeelightDevice() {
 
 function deleteDevice(deviceId) {
     const xhr = new XMLHttpRequest()
-    const bridgehost = bridgeServerIP.text
-    const bridgeport = bridgeServerPort.text
-    
-    xhr.open("DELETE", `http://${bridgehost}:${bridgeport}/bulbs/${deviceId}`, true)
+    xhr.open("DELETE", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs/${deviceId}`, true)
     xhr.onreadystatechange = function () {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            service.log("Device deleted successfully")
-            // Refresh the device list
+            discovery.removedDevices(deviceId)
             checkConnectionButton.clicked()
-        } else if (xhr.readyState === 4) {
-            service.log("Failed to delete device: " + xhr.responseText)
         }
     }
     xhr.send()
@@ -214,14 +193,11 @@ Row {
             onClicked: {
                 deviceList = []
                 deviceRepeater.model = deviceList
-                const xhr = new XMLHttpRequest()
-                const bridgehost = bridgeServerIP.text
-                const bridgeport = bridgeServerPort.text
                 
-                xhr.open("GET", `http://${bridgehost}:${bridgeport}/bulbs`, true)
+                const xhr = new XMLHttpRequest()
+                xhr.open("GET", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs`, true)
                 xhr.onreadystatechange = function () {
                     if (xhr.readyState === 4 && xhr.status === 200) {
-                        service.log("Successfully connected to bridge server on port " + bridgeport)
                         let res = JSON.parse(xhr.responseText)
                         if (res.bulbs && res.bulbs.length > 0) {
                             deviceList = res.bulbs.map(bulb => ({
@@ -231,42 +207,12 @@ Row {
                                 ip: bulb.address
                             }))
                             deviceRepeater.model = deviceList
-                            try {
-                                selectedDevices = JSON.parse(service.getSetting("General", "SelectedDevices"));
-                            } catch (e) {
-                                selectedDevices = [];
-                            }
-
-                            if (selectedDevices.length > 0) {
-                                for (var i = 0; i < deviceRepeater.count; i++) {
-                                    for (var j = 0; j < selectedDevices.length; j++) {
-                                        if (deviceRepeater.itemAt(i).deviceId == selectedDevices[j].deviceId) {
-                                            deviceRepeater.itemAt(i).color = "#209e20"
-                                        }
-                                    }
-                                }
-                            }
-                            service.log("Found " + deviceList.length + " devices on bridge server")
-                        } else {
-                            service.log("No devices found on bridge server")
                         }
-                    } else if (xhr.readyState === 4) {
-                        service.log("Failed to connect to bridge server: " + xhr.status + " " + xhr.responseText)
                     }
                 }
                 xhr.send()
             }
 }
-}
-Item {
-    Rectangle {
-        width : 130
-        height : 30
-        color : "#900000"
-        radius : 2
-    }
-    width : 90
-    height : 30
 }
 }
 Column {
@@ -421,7 +367,7 @@ Column {
     
     Text {
         color : theme.primarytextcolor
-        text : "Select the devices you want to control"
+        text : "Available devices from server:"
         font.pixelSize : 16
         font.family : "Poppins"
         font.bold : false
@@ -431,7 +377,6 @@ Column {
         wrapMode : Text.WordWrap
     }
     
-    // Connect Devices Button
     Item {
         width : 150
         height : 30
@@ -448,22 +393,11 @@ Column {
             anchors.verticalCenter : parent.verticalCenter
             font.family : "Poppins"
             font.bold : true
-            icon.source : "data:image/png;base64, iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAV0lEQVQ4jWP8//8/A0UAnwH///3r+P/vXwdevQQMuPv/37+7+AxgItaluMAwMIARGpIdDAwMoVjklaD0PSxyqxkYGSsodsFoNFLBABYC8qsJGcBIaXYGAFjoNxCMz3axAAAAAElFTkSuQmCC"
-            text : "Connect Devices"
+            text : "Connect All Devices"
             anchors.centerIn : parent
             onClicked: {
-                try {
-                    selectedDevices = JSON.parse(service.getSetting("General", "SelectedDevices"));
-                } catch (e) {
-                    selectedDevices = [];
-                }
-                
-                if (selectedDevices.length > 0) {
-                    service.log("Connecting " + selectedDevices.length + " devices to SignalRGB...")
-                    discovery.connect(selectedDevices)
-                    service.log("Devices connected successfully!")
-                } else {
-                    service.log("No devices selected. Please select devices first.")
+                if (deviceList.length > 0) {
+                    discovery.connect(deviceList)
                 }
             }
         }
@@ -476,96 +410,44 @@ Column {
             height : 30
             color : "#212d3a"
             radius : 2
-            property var deviceId: modelData.deviceId
             
             Text {
                 anchors.left: parent.left
                 anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                rightPadding: 50
+                rightPadding: 60
                 color : "white"
                 text : modelData.name
                 font.pixelSize : 16
                 font.family : "Poppins"
                 font.bold : true
-                width : parent.width - 60
+                width : parent.width - 70
                 elide : Text.ElideRight
             }
             
-            Button {
-                id: deleteDeviceButton
-                text: "Delete"
+            Rectangle {
                 width: 50
                 height: 20
                 anchors.right: parent.right
                 anchors.rightMargin: 5
                 anchors.verticalCenter: parent.verticalCenter
-                font.family: "Poppins"
-                font.pixelSize: 10
-                background: Rectangle {
-                    color: parent.pressed ? "#cc0000" : "#ff0000"
-                    radius: 2
-                }
-                contentItem: Text {
-                    text: parent.text
+                color: "#ff0000"
+                radius: 2
+                
+                Text {
+                    anchors.centerIn: parent
+                    text: "Delete"
                     color: "#ffffff"
-                    font: parent.font
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                    font.family: "Poppins"
+                    font.pixelSize: 10
+                    font.bold: true
                 }
-                onClicked: {
-                    deleteDevice(modelData.deviceId)
-                }
-            }
-            
-            MouseArea {
-                anchors.fill : parent
-                anchors.rightMargin: 60
-                cursorShape : Qt.PointingHandCursor
-                hoverEnabled : true
-                onEntered: {
-                    if (parent.color == "#212d3a")
-                    {
-                        parent.color = "#2e3f4f"
-                    }
-                }
-                onExited: {
-                    if (parent.color == "#2e3f4f")
-                    {
-                        parent.color = "#212d3a"
-                    }
-                }
-                onClicked: {
-                    try {
-    selectedDevices = JSON.parse(service.getSetting("General", "SelectedDevices"));
-} catch (e) {
-    selectedDevices = [];
-}
-
-                        if (selectedDevices.length == 0)
-                        {
-                            selectedDevices.push(modelData)
-                            parent.color = "#209e20"
-                            service.saveSetting("General", "SelectedDevices", JSON.stringify(selectedDevices))
-                            service.log("Device '" + modelData.name + "' selected. Click 'Connect Devices' to connect to SignalRGB.")
-                        } else {
-                        for (var i = 0; i < selectedDevices.length; i++) {
-                            if (selectedDevices[i].deviceId === modelData.deviceId)
-                            {
-                                let deviceIdToRemove = modelData.deviceId
-                                parent.color = "#212d3a";
-                                selectedDevices.splice(i, 1);
-                                service.saveSetting("General", "SelectedDevices", JSON.stringify(selectedDevices))
-
-                                discovery.removedDevices(deviceIdToRemove);
-                                service.log("Device '" + modelData.name + "' deselected.")
-                                return
-                            }
-                        }
-                        selectedDevices.push(modelData)
-                        parent.color = "#209e20"
-                        service.saveSetting("General", "SelectedDevices", JSON.stringify(selectedDevices))
-                        service.log("Device '" + modelData.name + "' selected. Click 'Connect Devices' to connect to SignalRGB.")
+                
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        deleteDevice(modelData.deviceId)
                     }
                 }
             }
