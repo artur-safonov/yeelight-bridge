@@ -23,13 +23,20 @@ function addYeelightDevice() {
     xhr.open("POST", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs`, true)
     xhr.setRequestHeader("Content-Type", "application/json")
     xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4 && xhr.status === 201) {
-            deviceIP.text = ""
-            deviceToken.text = ""
-            deviceName.text = ""
-            deviceModel.currentIndex = 0
-            checkConnectionButton.clicked()
+        if (xhr.readyState === 4) {
+            if (xhr.status === 201) {
+                deviceIP.text = ""
+                deviceToken.text = ""
+                deviceName.text = ""
+                deviceModel.currentIndex = 0
+                checkConnectionButton.clicked()
+            } else {
+                console.log("Yeelight Bridge: Failed to add device, status:", xhr.status)
+            }
         }
+    }
+    xhr.onerror = function() {
+        console.log("Yeelight Bridge: Error adding device to server")
     }
     xhr.send(JSON.stringify(deviceData))
 }
@@ -38,10 +45,17 @@ function deleteDevice(deviceId) {
     const xhr = new XMLHttpRequest()
     xhr.open("DELETE", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs/${deviceId}`, true)
     xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            discovery.removedDevices(deviceId)
-            checkConnectionButton.clicked()
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                discovery.removedDevices(deviceId)
+                checkConnectionButton.clicked()
+            } else {
+                console.log("Yeelight Bridge: Failed to delete device, status:", xhr.status)
+            }
         }
+    }
+    xhr.onerror = function() {
+        console.log("Yeelight Bridge: Error deleting device from server")
     }
     xhr.send()
 }
@@ -199,24 +213,39 @@ Row {
                 const xhr = new XMLHttpRequest()
                 xhr.open("GET", `http://${bridgeServerIP.text}:${bridgeServerPort.text}/bulbs`, true)
                 xhr.onreadystatechange = function () {
-                    if (xhr.readyState === 4 && xhr.status === 200) {
-                        let res = JSON.parse(xhr.responseText)
-                        if (res.bulbs && res.bulbs.length > 0) {
-                            deviceList = res.bulbs.map(bulb => ({
-                                deviceId: bulb.id,
-                                name: bulb.model || 'Yeelight Bulb',
-                                id: bulb.id,
-                                ip: bulb.address
-                            }))
-                            deviceRepeater.model = deviceList
-                            
-                            // Auto-reconnect if we have devices and none are currently connected
-                            if (deviceList.length > 0 && lastConnectedDevices.length === 0) {
-                                discovery.connect(deviceList)
-                                lastConnectedDevices = deviceList.slice()
+                    if (xhr.readyState === 4) {
+                        if (xhr.status === 200) {
+                            try {
+                                let res = JSON.parse(xhr.responseText)
+                                if (res.bulbs && res.bulbs.length > 0) {
+                                    deviceList = res.bulbs.map(bulb => ({
+                                        deviceId: bulb.id,
+                                        name: bulb.model || 'Yeelight Bulb',
+                                        id: bulb.id,
+                                        ip: bulb.address
+                                    }))
+                                    deviceRepeater.model = deviceList
+                                    
+                                    // Auto-reconnect if we have devices and none are currently connected
+                                    if (deviceList.length > 0 && lastConnectedDevices.length === 0) {
+                                        try {
+                                            discovery.connect(deviceList)
+                                            lastConnectedDevices = deviceList.slice()
+                                        } catch (error) {
+                                            console.log("Yeelight Bridge: Error auto-connecting devices:", error)
+                                        }
+                                    }
+                                }
+                            } catch (error) {
+                                console.log("Yeelight Bridge: Error parsing server response:", error)
                             }
+                        } else {
+                            console.log("Yeelight Bridge: Server returned error status:", xhr.status)
                         }
                     }
+                }
+                xhr.onerror = function() {
+                    console.log("Yeelight Bridge: Failed to connect to server")
                 }
                 xhr.send()
             }
@@ -405,8 +434,12 @@ Column {
             anchors.centerIn : parent
             onClicked: {
                 if (deviceList.length > 0) {
-                    discovery.connect(deviceList)
-                    lastConnectedDevices = deviceList.slice()
+                    try {
+                        discovery.connect(deviceList)
+                        lastConnectedDevices = deviceList.slice()
+                    } catch (error) {
+                        console.log("Yeelight Bridge: Error connecting devices:", error)
+                    }
                 }
             }
         }
