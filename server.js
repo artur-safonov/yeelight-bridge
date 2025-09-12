@@ -1,14 +1,18 @@
 const express = require('express');
 const miio = require('miio');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
 class YeelightBridgeServer {
     constructor(port = 3000) {
         this.port = port;
         this.app = express();
         this.bulbs = new Map();
+        this.dataFile = path.join(__dirname, 'devices.json');
         this.setupMiddleware();
         this.setupRoutes();
+        this.loadDevices();
     }
 
     setupMiddleware() {
@@ -101,6 +105,7 @@ class YeelightBridgeServer {
                     bulb.device.destroy();
                 }
                 this.bulbs.delete(bulbId);
+                this.saveDevices();
                 res.json({ 
                     success: true, 
                     message: `Bulb ${bulb.name} removed successfully` 
@@ -239,6 +244,7 @@ class YeelightBridgeServer {
                     this.bulbs.get(bulbId).connected = false;
                 }
             });
+            this.saveDevices();
             return {
                 success: true,
                 bulb: {
@@ -262,7 +268,7 @@ class YeelightBridgeServer {
         try {
             const { h, s, v } = this.rgbToHsv(r, g, b);
             await bulb.device.call('set_hsv', [Math.round(h), Math.round(s * 100), 'smooth', 500]);
-            await bulb.device.call('set_bright', [Math.round(brightness), 'smooth', 500]);
+//            await bulb.device.call('set_bright', [Math.round(brightness), 'smooth', 500]);
             bulb.lastColor = { r, g, b };
             bulb.lastBrightness = brightness;
             return { r, g, b, brightness };
@@ -329,6 +335,68 @@ class YeelightBridgeServer {
         return { h, s, v };
     }
 
+    saveDevices() {
+        try {
+            const devicesData = Array.from(this.bulbs.values()).map(bulb => ({
+                id: bulb.id,
+                name: bulb.name,
+                ip: bulb.ip,
+                token: bulb.token,
+                model: bulb.model,
+                address: bulb.address,
+                lastBrightness: bulb.lastBrightness,
+                lastColor: bulb.lastColor
+            }));
+            fs.writeFileSync(this.dataFile, JSON.stringify(devicesData, null, 2));
+        } catch (error) {
+            console.error('Error saving devices:', error);
+        }
+    }
+
+    async loadDevices() {
+        try {
+            if (fs.existsSync(this.dataFile)) {
+                const data = fs.readFileSync(this.dataFile, 'utf8');
+                const devicesData = JSON.parse(data);
+                
+                for (const deviceData of devicesData) {
+                    try {
+                        const device = await miio.device({
+                            address: deviceData.ip,
+                            token: deviceData.token
+                        });
+                        
+                        const bulbInfo = {
+                            id: deviceData.id,
+                            device: device,
+                            name: deviceData.name,
+                            ip: deviceData.ip,
+                            token: deviceData.token,
+                            model: deviceData.model,
+                            address: deviceData.address,
+                            connected: true,
+                            lastBrightness: deviceData.lastBrightness || 100,
+                            lastColor: deviceData.lastColor || { r: 255, g: 255, b: 255 }
+                        };
+                        
+                        this.bulbs.set(deviceData.id, bulbInfo);
+                        
+                        device.on('error', (error) => {
+                            if (this.bulbs.has(deviceData.id)) {
+                                this.bulbs.get(deviceData.id).connected = false;
+                            }
+                        });
+                        
+                        console.log(`Restored device: ${deviceData.name} (${deviceData.id})`);
+                    } catch (error) {
+                        console.error(`Failed to restore device ${deviceData.name}:`, error.message);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading devices:', error);
+        }
+    }
 
     start() {
         this.app.listen(this.port, () => {

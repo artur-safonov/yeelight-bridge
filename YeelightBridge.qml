@@ -2,6 +2,8 @@ Item {
     anchors.fill : parent
     property var deviceList: []
     
+    property var lastConnectedDevices: []
+    
     Component.onCompleted: {
         bridgeServerIP.text = service.getSetting("General", "BridgeServerIP") || "127.0.0.1"
         bridgeServerPort.text = service.getSetting("General", "BridgeServerPort") || "3000"
@@ -207,6 +209,12 @@ Row {
                                 ip: bulb.address
                             }))
                             deviceRepeater.model = deviceList
+                            
+                            // Auto-reconnect if we have devices and none are currently connected
+                            if (deviceList.length > 0 && lastConnectedDevices.length === 0) {
+                                discovery.connect(deviceList)
+                                lastConnectedDevices = deviceList.slice()
+                            }
                         }
                     }
                 }
@@ -398,6 +406,7 @@ Column {
             onClicked: {
                 if (deviceList.length > 0) {
                     discovery.connect(deviceList)
+                    lastConnectedDevices = deviceList.slice()
                 }
             }
         }
