@@ -83,7 +83,7 @@ class YeelightDevice {
 
 	setServiceSettings() {
 	    this.serverHost = service.getSetting("General", "BridgeServerIP") || '127.0.0.1';
-    	this.serverPort = service.getSetting("General", "BridgeServerPort") || '3000';
+    	this.serverPort = service.getSetting("General", "BridgeServerPort") || '8888';
 	}
 
 	update() {

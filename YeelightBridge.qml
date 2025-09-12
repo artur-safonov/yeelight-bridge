@@ -6,7 +6,7 @@ Item {
     
     Component.onCompleted: {
         bridgeServerIP.text = service.getSetting("General", "BridgeServerIP") || "127.0.0.1"
-        bridgeServerPort.text = service.getSetting("General", "BridgeServerPort") || "3000"
+        bridgeServerPort.text = service.getSetting("General", "BridgeServerPort") || "8888"
         if (bridgeServerIP.text !== "" && bridgeServerPort.text !== "") {
             checkConnectionButton.clicked();
         }

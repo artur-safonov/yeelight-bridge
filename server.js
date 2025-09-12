@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 class YeelightBridgeServer {
-    constructor(port = 3000) {
+    constructor(port = 8888) {
         this.port = port;
         this.app = express();
         this.bulbs = new Map();
@@ -415,7 +415,7 @@ class YeelightBridgeServer {
     }
 }
 
-const server = new YeelightBridgeServer(process.env.PORT || 3000);
+const server = new YeelightBridgeServer(process.env.PORT || 8888);
 server.start();
 
 process.on('SIGINT', () => {
