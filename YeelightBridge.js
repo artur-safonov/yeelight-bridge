@@ -13,11 +13,14 @@ export function ControllableParameters() {
 	];
 }
 
+const COLOR_THRESHOLD = 10;
+
 export function Initialize() {
 	device.setName(controller.name);
 	device.setSize([1, 1]);
 	device.setControllableLeds(["LED 1"], [[0, 0]]);
 	device.setImageFromUrl('https://cdn.worldvectorlogo.com/logos/yeelight-1.svg');
+	controller.lastColor = null;
 }
 
 export function Render() {
@@ -27,14 +30,19 @@ export function Render() {
 	} else {
 		color = device.color(0, 0);
 	}
-	setColors(color[0], color[1], color[2]);
-	device.pause(500);
+
+	if (hasColorChanged(color)) {
+		setColors(color[0], color[1], color[2]);
+		controller.lastColor = color.slice();
+	}
+	device.pause(100);
 }
 
 export function Shutdown() {
 	device.pause(250);
 	let color = hexToRgb(shutdownColor);
 	setColors(color[0], color[1], color[2]);
+	controller.lastColor = null;
 }
 
 
@@ -90,6 +98,20 @@ class YeelightDevice {
 			service.announceController(this);
 		}
 	};
+}
+
+function hasColorChanged(newColor) {
+	if (!controller.lastColor) {
+		return true;
+	}
+
+	const rDiff = Math.abs(newColor[0] - controller.lastColor[0]);
+	const gDiff = Math.abs(newColor[1] - controller.lastColor[1]);
+	const bDiff = Math.abs(newColor[2] - controller.lastColor[2]);
+	
+	const totalDiff = Math.sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
+	
+	return totalDiff >= COLOR_THRESHOLD;
 }
 
 function setColors(r, g, b) {
