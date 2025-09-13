@@ -2,10 +2,25 @@
 
 Control Yeelight smart bulbs through SignalRGB using a local bridge server with automatic device persistence and color optimization.
 
+## Repository Structure
+
+- **[yeelight-bridge](https://github.com/artur-safonov/yeelight-bridge)** - SignalRGB addon repository
+- **[yeelight-bridge-server](https://github.com/artur-safonov/yeelight-bridge-server)** - Bridge server repository
+
 ## Quick Start
 
 ### 1. Server Setup
+
+The bridge server has been moved to a separate repository. Download and install it from:
+
+**yeelight-bridge-server repository**
+
 ```bash
+# Clone the server repository
+git clone https://github.com/artur-safonov/yeelight-bridge-server.git
+cd yeelight-bridge-server
+
+# Install dependencies and start
 npm install
 npm start
 ```
@@ -35,8 +50,10 @@ npm start
 
 ## Auto-Start (Windows Service)
 
+The Windows service installation is available in the server repository:
+
 ```bash
-# Install as Windows service
+# Install as Windows service (run from server directory)
 npm run install-service
 
 # Uninstall service
@@ -67,7 +84,5 @@ npm run uninstall-service
 
 ## Files
 
-- `server.js` - Bridge server with persistence
 - `YeelightBridge.js` - SignalRGB addon logic
 - `YeelightBridge.qml` - SignalRGB UI
-- `devices.json` - Auto-created device storage
